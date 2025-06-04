@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Travel Planner</title>
+    <link rel="stylesheet" href="/static/App.css">
+</head>
+<body>
+    <div class="app">
+        <div id="loading-indicator" style="display: none;">Loading...</div>
+        <div id="error-message" style="display: none; color: red;"></div>
+        
+        <div class="step">
+            <h2>Plan Your Trip</h2>
+            <select id="city-select"></select>
+            <input type="number" id="budget-input" value="2000">
+            <button id="calculate-btn">Calculate Trip</button>
+        </div>
+        
+        <div id="results"></div>
+        <div id="flights-container"></div>
+        <div id="stays-container"></div>
+        <div id="activities-container"></div>
+    </div>
+    
+    <script src="/static/App.js"></script>
+</body>
+</html>

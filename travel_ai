@@ -1,10 +1,23 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, abort
 from flask_cors import CORS
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import floor
+import requests
+import time
+import os
+from functools import wraps
 
 app = Flask(__name__)
 CORS(app)
+
+# Configuration
+RAPIDAPI_KEY = os.getenv('RAPIDAPI_KEY', 'your_default_key_here')
+RAPIDAPI_HOST = 'skyscanner50.p.rapidapi.com'  # Example API host
+BASE_API_URL = 'https://skyscanner50.p.rapidapi.com/api/v1/'
+
+# Rate limiting setup
+last_request_time = 0
+REQUEST_DELAY = 1  # 1 second between requests
 
 # Destination data with average prices
 DESTINATION_AVERAGES = {
@@ -28,24 +41,10 @@ DESTINATION_AVERAGES = {
         "airbnbPerNight": 120,
         "minDays": 1,
         "maxDays": 10
-    },
-    "Bali": {
-        "flight": 1200,
-        "hotelPerNight": 80,
-        "airbnbPerNight": 50,
-        "minDays": 1,
-        "maxDays": 21
-    },
-    "London": {
-        "flight": 550,
-        "hotelPerNight": 180,
-        "airbnbPerNight": 110,
-        "minDays": 1,
-        "maxDays": 14
     }
 }
 
-# Mock database
+# Mock data fallback
 TRIP_DATA = {
     "flights": {
         "Paris": [
@@ -53,180 +52,143 @@ TRIP_DATA = {
             {"id": "BA456", "airline": "British Airways", "price": 600, "departure": "14:30", "airport": "EWR"}
         ],
         "Tokyo": [
-            {"id": "JL789", "airline": "JAL", "price": 850, "departure": "11:45", "airport": "JFK"},
-            {"id": "NH012", "airline": "ANA", "price": 900, "departure": "09:15", "airport": "LAX"}
-        ],
-        "New York": [
-            {"id": "DL123", "airline": "Delta", "price": 380, "departure": "07:30", "airport": "LAX"},
-            {"id": "AA456", "airline": "American Airlines", "price": 420, "departure": "15:45", "airport": "SFO"}
-        ],
-        "Bali": [
-            {"id": "GA789", "airline": "Garuda Indonesia", "price": 1150, "departure": "22:15", "airport": "LAX"},
-            {"id": "SQ012", "airline": "Singapore Airlines", "price": 1250, "departure": "18:30", "airport": "JFK"}
-        ],
-        "London": [
-            {"id": "BA789", "airline": "British Airways", "price": 520, "departure": "19:15", "airport": "JFK"},
-            {"id": "VA012", "airline": "Virgin Atlantic", "price": 580, "departure": "12:45", "airport": "EWR"}
+            {"id": "JL789", "airline": "JAL", "price": 850, "departure": "11:45", "airport": "JFK"}
         ]
     },
     "stays": {
         "Paris": [
-            {"id": "H1", "name": "Le Meurice", "price": 200, "type": "hotel", "category": "luxury"},
-            {"id": "H2", "name": "Ibis Budget", "price": 80, "type": "hotel", "category": "budget"},
-            {"id": "A1", "name": "Charming Paris Apartment", "price": 120, "type": "airbnb", "category": "entire-home"}
-        ],
-        "Tokyo": [
-            {"id": "H3", "name": "Park Hotel Tokyo", "price": 150, "type": "hotel", "category": "business"},
-            {"id": "H4", "name": "Capsule Hotel", "price": 40, "type": "hotel", "category": "budget"},
-            {"id": "A2", "name": "Traditional Ryokan", "price": 90, "type": "airbnb", "category": "unique-stay"}
-        ],
-        "New York": [
-            {"id": "H5", "name": "The Plaza", "price": 250, "type": "hotel", "category": "luxury"},
-            {"id": "H6", "name": "Pod Times Square", "price": 150, "type": "hotel", "category": "budget"},
-            {"id": "A3", "name": "Manhattan Loft", "price": 180, "type": "airbnb", "category": "entire-home"}
-        ],
-        "Bali": [
-            {"id": "H7", "name": "Four Seasons Bali", "price": 100, "type": "hotel", "category": "luxury"},
-            {"id": "H8", "name": "Bali Backpackers", "price": 30, "type": "hotel", "category": "budget"},
-            {"id": "A4", "name": "Jungle Treehouse", "price": 60, "type": "airbnb", "category": "unique-stay"}
-        ],
-        "London": [
-            {"id": "H9", "name": "The Savoy", "price": 220, "type": "hotel", "category": "luxury"},
-            {"id": "H10", "name": "Travelodge", "price": 90, "type": "hotel", "category": "budget"},
-            {"id": "A5", "name": "London Flat", "price": 130, "type": "airbnb", "category": "entire-home"}
+            {"id": "H1", "name": "Le Meurice", "price": 200, "type": "hotel"},
+            {"id": "A1", "name": "Paris Apartment", "price": 120, "type": "airbnb"}
         ]
     },
     "activities": {
         "Paris": [
             {"id": 1, "name": "Eiffel Tower Tour", "price": 50},
-            {"id": 2, "name": "Louvre Ticket", "price": 30},
-            {"id": 3, "name": "Seine River Cruise", "price": 40}
-        ],
-        "Tokyo": [
-            {"id": 4, "name": "Shibuya Sky Ticket", "price": 20},
-            {"id": 5, "name": "Sushi Class", "price": 60},
-            {"id": 6, "name": "Robot Restaurant Show", "price": 45}
-        ],
-        "New York": [
-            {"id": 7, "name": "Statue of Liberty Tour", "price": 35},
-            {"id": 8, "name": "Broadway Show", "price": 120},
-            {"id": 9, "name": "Met Museum Ticket", "price": 25}
-        ],
-        "Bali": [
-            {"id": 10, "name": "Waterfall Tour", "price": 40},
-            {"id": 11, "name": "Balinese Cooking Class", "price": 50},
-            {"id": 12, "name": "Sunset Uluwatu", "price": 30}
-        ],
-        "London": [
-            {"id": 13, "name": "London Eye Ticket", "price": 45},
-            {"id": 14, "name": "West End Show", "price": 80},
-            {"id": 15, "name": "British Museum Tour", "price": 25}
+            {"id": 2, "name": "Louvre Museum", "price": 30}
         ]
     }
 }
 
-@app.route('/')
-def home():
-    return "Travely.ai Flask Server is Running. Try /calculate_trip"
+def rate_limited(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        global last_request_time
+        elapsed = time.time() - last_request_time
+        if elapsed < REQUEST_DELAY:
+            time.sleep(REQUEST_DELAY - elapsed)
+        last_request_time = time.time()
+        return f(*args, **kwargs)
+    return decorated_function
 
-@app.route('/search_destinations', methods=['GET'])
-def search_destinations():
-    query = request.args.get('query', '').lower()
-    matches = [city for city in DESTINATION_AVERAGES.keys() if query in city.lower()]
-    return jsonify(matches)
+def call_rapidapi(endpoint, params=None):
+    """Generic function to call RapidAPI endpoints"""
+    headers = {
+        'X-RapidAPI-Key': RAPIDAPI_KEY,
+        'X-RapidAPI-Host': RAPIDAPI_HOST
+    }
+    
+    try:
+        response = requests.get(
+            BASE_API_URL + endpoint,
+            headers=headers,
+            params=params or {}
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"RapidAPI request failed: {str(e)}")
+        return None
 
-@app.route('/calculate_trip', methods=['POST'])
+@app.route('/api/flights', methods=['GET'])
+@rate_limited
+def get_flights():
+    city = request.args.get('city')
+    if not city:
+        abort(400, description="Missing 'city' parameter")
+    
+    # Try RapidAPI first
+    api_params = {
+        'origin': 'JFK',
+        'destination': city,
+        'date': (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+    }
+    
+    api_response = call_rapidapi('searchFlights', api_params)
+    
+    if api_response:
+        flights = [{
+            'id': f.get('id') or f.get('flight_number'),
+            'airline': f.get('carrier', {}).get('name', 'Unknown'),
+            'price': f.get('price', 0),
+            'departure': f.get('departure_time', ''),
+            'airport': f.get('origin', {}).get('iata', '')
+        } for f in api_response.get('data', [])]
+    else:
+        # Fallback to mock data
+        flights = TRIP_DATA['flights'].get(city, [])
+    
+    return jsonify(flights)
+
+@app.route('/api/stays', methods=['GET'])
+@rate_limited
+def get_stays():
+    city = request.args.get('city')
+    if not city:
+        abort(400, description="Missing 'city' parameter")
+    
+    # Fallback to mock data (replace with actual API call)
+    stays = TRIP_DATA['stays'].get(city, [])
+    return jsonify(stays)
+
+@app.route('/api/activities', methods=['GET'])
+def get_activities():
+    city = request.args.get('city')
+    if not city:
+        abort(400, description="Missing 'city' parameter")
+    
+    return jsonify(TRIP_DATA['activities'].get(city, []))
+
+@app.route('/api/calculate', methods=['POST'])
 def calculate_trip():
-    data = request.json
-    city = data['city']
-    budget = data['budget']
-    custom_days = data.get('customDays')  # New parameter for custom days
+    data = request.get_json()
+    if not data:
+        abort(400, description="No JSON data provided")
     
-    avg = DESTINATION_AVERAGES[city]
+    city = data.get('city')
+    budget = data.get('budget')
     
-    # Immediate warning if flight exceeds 50% of budget
-    if avg['flight'] > budget * 0.5:
-        return jsonify({
-            'warning': f"Flight costs (${avg['flight']}) exceed 50% of your budget. Please increase your budget.",
-            'minimumBudget': avg['flight'] * 2  # Suggest minimum required budget
-        }), 400
+    if not city or not budget:
+        abort(400, description="Missing 'city' or 'budget'")
     
-    # Calculate available budget after flight (25% for lodging)
-    lodging_budget = budget * 0.25
-    daily_lodging = avg['hotelPerNight']  # Default to hotel
+    avg = DESTINATION_AVERAGES.get(city)
+    if not avg:
+        abort(404, description=f"Destination '{city}' not found")
     
-    # Calculate suggested days
+    # Basic trip calculation logic
+    flight_cost = avg['flight']
+    daily_lodging = avg['hotelPerNight']
+    available_for_lodging = budget * 0.25  # 25% of budget for lodging
+    
     suggested_days = min(
-        max(
-            floor(lodging_budget / daily_lodging),
-            avg['minDays']
-        ),
+        max(floor(available_for_lodging / daily_lodging), avg['minDays']),
         avg['maxDays']
     )
     
-    # Use custom days if provided (with validation)
-    final_days = suggested_days
-    if custom_days:
-        required_lodging = custom_days * daily_lodging
-        if required_lodging > lodging_budget:
-            return jsonify({
-                'warning': f"{custom_days} days requires ${required_lodging} for lodging (${daily_lodging}/night).",
-                'requiredBudgetIncrease': required_lodging - lodging_budget,
-                'suggestedDays': suggested_days
-            }), 400
-        final_days = custom_days
-    
     return jsonify({
-        'tripLength': final_days,
-        'flightBudget': avg['flight'],
-        'lodgingBudget': daily_lodging * final_days,
-        'activityBudget': budget * 0.25,
+        'city': city,
         'suggestedDays': suggested_days,
-        'minimumBudget': avg['flight'] * 2
+        'flightCost': flight_cost,
+        'dailyLodgingCost': daily_lodging,
+        'minBudgetRequired': flight_cost + (avg['minDays'] * daily_lodging)
     })
 
-@app.route('/flights')
-def get_flights():
-    city = request.args.get('city')
-    max_price = float(request.args.get('max_price', 10000))
-    flights = [f for f in TRIP_DATA['flights'][city] if f['price'] <= max_price]
-    return jsonify(flights)
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': str(error)}), 404
 
-@app.route('/stays')
-def get_stays():
-    city = request.args.get('city')
-    max_price = float(request.args.get('max_price', 10000))
-    stays = [s for s in TRIP_DATA['stays'][city] if s['price'] <= max_price]
-    return jsonify(stays)
-
-@app.route('/activities')
-def get_activities():
-    city = request.args.get('city')
-    return jsonify(TRIP_DATA['activities'][city])
-
-@app.route('/book', methods=['POST'])
-def book_trip():
-    data = request.json
-    total_cost = (
-        data['flight']['price'] + 
-        (data['stay']['price'] * data['tripLength']) +
-        sum(t['price'] for t in data['activities'])
-    )
-    
-    confirmation_id = f"TRV-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    
-    return jsonify({
-        "status": "success",
-        "confirmation_id": confirmation_id,
-        "total_cost": total_cost,
-        "itinerary": {
-            "city": data['city'],
-            "dates": data['dates'],
-            "flight": data['flight'],
-            "stay": data['stay'],
-            "activities": data['activities']
-        }
-    })
+@app.errorhandler(400)
+def bad_request(error):
+    return jsonify({'error': str(error)}), 400
 
 if __name__ == '__main__':
-    app.run(port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)
